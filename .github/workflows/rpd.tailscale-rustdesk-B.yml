@@ -1,4 +1,4 @@
-name: RDP + Tailscale + RustDesk + (Optional) Chrome Remote Desktop (A)
+name: RDP + Tailscale + RustDesk + (Optional) Chrome Remote Desktop (B)
 
 on:
   workflow_dispatch:
@@ -25,7 +25,7 @@ on:
         required: false
         default: "true"
       cycles:
-        description: "0=stop after A; N=handoffs left incl this run"
+        description: "0=stop after B; N=handoffs left incl this run"
         required: false
         default: "0"
       rdp_count:
@@ -341,10 +341,10 @@ jobs:
                 crd_code        = "${{ inputs.crd_code }}"
                 crd_pin         = "${{ inputs.crd_pin }}"
               }
-              $url2 = "https://api.github.com/repos/${{ github.repository }}/actions/workflows/rpd.tailscale-rustdesk-B.yml/dispatches"
+              $url2 = "https://api.github.com/repos/${{ github.repository }}/actions/workflows/rpd.tailscale-rustdesk-A.yml/dispatches"
               $hdr2 = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
               $body2 = @{ ref="${{ github.ref_name }}"; inputs=$payload } | ConvertTo-Json -Depth 20
               Invoke-WebRequest -Method POST -Uri $url2 -Headers $hdr2 -Body $body2 | Out-Null
-              Write-Host "Dispatched Workflow B with cycles=$next"
+              Write-Host "Dispatched Workflow A with cycles=$next"
             }
           } else { Write-Host "No cycles configured. Done." }
