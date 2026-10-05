@@ -224,9 +224,34 @@ jobs:
             Start-Process msiexec.exe -ArgumentList "/i","`"$dst`"","/quiet","/norestart" -Wait
             Remove-Item $dst -Force
           }
+      
           & $ts logout | Out-Null
           & $ts up --authkey "${{ inputs.ts_authkey }}" --hostname "$env:TS_HOSTNAME" --accept-dns=true --accept-routes=true
-          $ip4 = & $ts ip -4 | Select-Object -First 1
+      
+          function Get-TailscaleIPv4 {
+            $job = Start-Job -ScriptBlock { param($exe) & $exe ip -4 } -ArgumentList $ts
+            if (Wait-Job $job -Timeout 20) {
+              $result = Receive-Job $job | Select-Object -First 1
+              Remove-Job $job -Force
+              return $result
+            } else {
+              Stop-Job $job -ErrorAction SilentlyContinue
+              Remove-Job $job -Force
+              return $null
+            }
+          }
+      
+          $ip4 = $null
+          while (-not $ip4) {
+            Write-Host "Checking Tailscale IPv4..."
+            $ip4 = Get-TailscaleIPv4
+            if (-not $ip4) {
+              Write-Host "No output after 20s, retrying 'tailscale up'..."
+              & $ts up --authkey "${{ inputs.ts_authkey }}" --hostname "$env:TS_HOSTNAME" --accept-dns=true --accept-routes=true
+              Start-Sleep -Seconds 5
+            }
+          }
+      
           "TAILSCALE_IP=$ip4" | Out-File -Append $env:GITHUB_ENV
           Write-Host "Tailscale IPv4: $ip4"
 
