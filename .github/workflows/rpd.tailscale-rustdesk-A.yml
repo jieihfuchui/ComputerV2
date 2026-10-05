@@ -218,40 +218,64 @@ jobs:
         run: |
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
           if (-not (Test-Path $ts)) {
-            $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-            $dst = "$env:TEMP\tailscale.msi"
-            Invoke-WebRequest -Uri $url -OutFile $dst
-            Start-Process msiexec.exe -ArgumentList "/i","`"$dst`"","/quiet","/norestart" -Wait
-            Remove-Item $dst -Force
+              $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+              $dst = "$env:TEMP\tailscale.msi"
+              Invoke-WebRequest -Uri $url -OutFile $dst
+              Start-Process msiexec.exe -ArgumentList "/i","`"$dst`"","/quiet","/norestart" -Wait
+              Remove-Item $dst -Force
           }
-      
+          
           & $ts logout | Out-Null
-          & $ts up --authkey "${{ inputs.ts_authkey }}" --hostname "$env:TS_HOSTNAME" --accept-dns=true --accept-routes=true
-      
-          function Get-TailscaleIPv4 {
-            $job = Start-Job -ScriptBlock { param($exe) & $exe ip -4 } -ArgumentList $ts
-            if (Wait-Job $job -Timeout 20) {
-              $result = Receive-Job $job | Select-Object -First 1
-              Remove-Job $job -Force
-              return $result
-            } else {
-              Stop-Job $job -ErrorAction SilentlyContinue
-              Remove-Job $job -Force
-              return $null
-            }
+          
+          function Invoke-WithTimeout {
+              param($ScriptBlock, $ArgList, $TimeoutSec = 20)
+              $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgList
+              if (Wait-Job $job -Timeout $TimeoutSec) {
+                  $result = Receive-Job $job
+                  Remove-Job $job -Force
+                  return $result
+              } else {
+                  Stop-Job $job -ErrorAction SilentlyContinue
+                  Remove-Job $job -Force
+                  return $null
+              }
           }
-      
+          
+          # --- Step 1: tailscale up, retried with timeout ---
+          $upSucceeded = $false
+          while (-not $upSucceeded) {
+              Write-Host "Running 'tailscale up'..."
+              $out = Invoke-WithTimeout -ScriptBlock {
+                  param($exe, $hostname)
+                  & $exe up --authkey "${{ inputs.ts_authkey }}" --hostname $hostname --accept-dns=true --accept-routes=true
+              } -ArgList @($ts, $env:TS_HOSTNAME) -TimeoutSec 25
+          
+              # Check actual connection state instead of trusting the job didn't error
+              $status = & $ts status --json 2>&1 | ConvertFrom-Json -ErrorAction SilentlyContinue
+              if ($status -and $status.BackendState -eq "Running") {
+                  $upSucceeded = $true
+              } else {
+                  Write-Host "tailscale up didn't complete (or timed out), retrying in 5s..."
+                  Start-Sleep -Seconds 5
+              }
+          }
+          Write-Host "Tailscale is up."
+          
+          # --- Step 2: get IPv4, retried with timeout ---
           $ip4 = $null
           while (-not $ip4) {
-            Write-Host "Checking Tailscale IPv4..."
-            $ip4 = Get-TailscaleIPv4
-            if (-not $ip4) {
-              Write-Host "No output after 20s, retrying 'tailscale up'..."
-              & $ts up --authkey "${{ inputs.ts_authkey }}" --hostname "$env:TS_HOSTNAME" --accept-dns=true --accept-routes=true
-              Start-Sleep -Seconds 5
-            }
+              Write-Host "Checking Tailscale IPv4..."
+              $ip4 = Invoke-WithTimeout -ScriptBlock {
+                  param($exe)
+                  & $exe ip -4
+              } -ArgList @($ts) -TimeoutSec 20 | Select-Object -First 1
+          
+              if (-not $ip4) {
+                  Write-Host "No IP yet, retrying in 5s..."
+                  Start-Sleep -Seconds 5
+              }
           }
-      
+          
           "TAILSCALE_IP=$ip4" | Out-File -Append $env:GITHUB_ENV
           Write-Host "Tailscale IPv4: $ip4"
 
